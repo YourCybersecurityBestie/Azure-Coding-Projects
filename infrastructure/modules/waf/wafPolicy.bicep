@@ -14,8 +14,63 @@ param requestBodyCheck bool = true
 @description('Maximum request body size in KB (Premium supports up to 128KB)')
 param requestBodySizeInKb int = 128
 
+@description('Rate limit threshold (requests per minute per IP)')
+@minValue(100)
+@maxValue(5000)
+param rateLimitThreshold int = 500
+
+@description('Enable geo-blocking')
+param enableGeoBlocking bool = false
+
+@description('Country codes to block (ISO 3166-1 alpha-2). Only used if enableGeoBlocking is true.')
+param blockedCountryCodes array = []
+
 @description('Tags to apply to the resource')
 param tags object = {}
+
+// Build custom rules array dynamically
+var rateLimitRule = {
+  name: 'RateLimitRule'
+  priority: 100
+  enabledState: 'Enabled'
+  ruleType: 'RateLimitRule'
+  rateLimitDurationInMinutes: 1
+  rateLimitThreshold: rateLimitThreshold
+  matchConditions: [
+    {
+      matchVariable: 'SocketAddr'
+      operator: 'IPMatch'
+      negateCondition: false
+      matchValue: [
+        '0.0.0.0/0'
+      ]
+    }
+  ]
+  action: 'Block'
+}
+
+var geoBlockRule = {
+  name: 'GeoBlockRule'
+  priority: 200
+  enabledState: 'Enabled'
+  ruleType: 'MatchRule'
+  matchConditions: [
+    {
+      matchVariable: 'SocketAddr'
+      operator: 'GeoMatch'
+      negateCondition: false
+      matchValue: blockedCountryCodes
+    }
+  ]
+  action: 'Block'
+}
+
+var customRules = enableGeoBlocking && !empty(blockedCountryCodes) ? [
+  rateLimitRule
+  geoBlockRule
+] : [
+  rateLimitRule
+]
 
 resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@2024-02-01' = {
   name: wafPolicyName
@@ -31,29 +86,10 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
       requestBodyCheck: requestBodyCheck ? 'Enabled' : 'Disabled'
       maxRequestBodySizeInKb: requestBodySizeInKb
       customBlockResponseStatusCode: 403
-      customBlockResponseBody: base64('{"error":"Request blocked by WAF policy"}')
+      customBlockResponseBody: base64('{"error":"Request blocked by WAF policy","code":"BLOCKED"}')
     }
     customRules: {
-      rules: [
-        {
-          name: 'RateLimitRule'
-          priority: 100
-          enabledState: 'Enabled'
-          ruleType: 'RateLimitRule'
-          rateLimitDurationInMinutes: 1
-          rateLimitThreshold: 1000
-          matchConditions: [
-            {
-              matchVariable: 'RequestUri'
-              operator: 'RegEx'
-              matchValue: [
-                '.*'
-              ]
-            }
-          ]
-          action: 'Block'
-        }
-      ]
+      rules: customRules
     }
     managedRules: {
       managedRuleSets: [

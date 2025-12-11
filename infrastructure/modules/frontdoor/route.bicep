@@ -10,6 +10,21 @@ param endpointName string
 @description('The resource ID of the origin group')
 param originGroupId string
 
+@description('Query string caching behavior')
+@allowed([
+  'UseQueryString'
+  'IgnoreQueryString'
+  'IgnoreSpecifiedQueryStrings'
+  'IncludeSpecifiedQueryStrings'
+])
+param queryStringCachingBehavior string = 'UseQueryString'
+
+@description('Enable caching')
+param enableCaching bool = true
+
+@description('Resource ID of the rule set to apply (optional)')
+param ruleSetId string = ''
+
 resource profile 'Microsoft.Cdn/profiles@2024-02-01' existing = {
   name: profileName
 }
@@ -26,6 +41,11 @@ resource route 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = {
     originGroup: {
       id: originGroupId
     }
+    ruleSets: !empty(ruleSetId) ? [
+      {
+        id: ruleSetId
+      }
+    ] : []
     supportedProtocols: [
       'Http'
       'Https'
@@ -37,8 +57,8 @@ resource route 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = {
     linkToDefaultDomain: 'Enabled'
     httpsRedirect: 'Enabled'
     enabledState: 'Enabled'
-    cacheConfiguration: {
-      queryStringCachingBehavior: 'IgnoreQueryString'
+    cacheConfiguration: enableCaching ? {
+      queryStringCachingBehavior: queryStringCachingBehavior
       compressionSettings: {
         isCompressionEnabled: true
         contentTypesToCompress: [
@@ -52,7 +72,7 @@ resource route 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = {
           'image/svg+xml'
         ]
       }
-    }
+    } : null
   }
 }
 

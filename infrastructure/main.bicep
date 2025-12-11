@@ -16,9 +16,45 @@ param baseName string
 @description('App Service hostname (backend origin)')
 param appServiceHostName string
 
+@description('App Service name (for access restrictions). Leave empty to skip restriction configuration.')
+param appServiceName string = ''
+
 @description('WAF mode')
 @allowed(['Detection', 'Prevention'])
 param wafMode string = 'Prevention'
+
+@description('Rate limit threshold (requests per minute per IP)')
+@minValue(100)
+@maxValue(5000)
+param rateLimitThreshold int = 500
+
+@description('Enable geo-blocking')
+param enableGeoBlocking bool = false
+
+@description('Country codes to block (ISO 3166-1 alpha-2)')
+param blockedCountryCodes array = []
+
+@description('Query string caching behavior')
+@allowed([
+  'UseQueryString'
+  'IgnoreQueryString'
+  'IgnoreSpecifiedQueryStrings'
+  'IncludeSpecifiedQueryStrings'
+])
+param queryStringCachingBehavior string = 'UseQueryString'
+
+@description('X-Frame-Options header value')
+@allowed([
+  'DENY'
+  'SAMEORIGIN'
+])
+param xFrameOptions string = 'SAMEORIGIN'
+
+@description('Enable security alert rules')
+param enableAlertRules bool = true
+
+@description('Action Group ID for alert notifications (optional)')
+param alertActionGroupId string = ''
 
 @description('Log retention in days')
 param logRetentionDays int = 90
@@ -45,6 +81,7 @@ var routeName = 'route-default'
 var wafPolicyName = 'waf${baseName}${environment}'
 var securityPolicyName = 'sp-waf-${baseName}'
 var logAnalyticsName = 'law-${baseName}-${environment}'
+var securityHeadersRuleSetName = 'SecurityHeaders'
 
 // ============================================================================
 // Log Analytics Workspace
@@ -67,6 +104,9 @@ module wafPolicy 'modules/waf/wafPolicy.bicep' = {
   params: {
     wafPolicyName: wafPolicyName
     wafMode: wafMode
+    rateLimitThreshold: rateLimitThreshold
+    enableGeoBlocking: enableGeoBlocking
+    blockedCountryCodes: blockedCountryCodes
     tags: resourceTags
   }
 }
@@ -120,18 +160,33 @@ module origin 'modules/frontdoor/origin.bicep' = {
 }
 
 // ============================================================================
+// Security Headers Rule Set
+// ============================================================================
+module securityHeaders 'modules/frontdoor/securityHeaders.bicep' = {
+  name: 'deploy-securityHeaders'
+  params: {
+    ruleSetName: securityHeadersRuleSetName
+    profileName: frontDoorProfile.outputs.profileName
+    xFrameOptions: xFrameOptions
+  }
+}
+
+// ============================================================================
 // Route
 // ============================================================================
 module route 'modules/frontdoor/route.bicep' = {
   name: 'deploy-route'
   dependsOn: [
     origin
+    securityHeaders
   ]
   params: {
     routeName: routeName
     profileName: frontDoorProfile.outputs.profileName
     endpointName: frontDoorEndpoint.outputs.endpointName
     originGroupId: originGroup.outputs.originGroupId
+    queryStringCachingBehavior: queryStringCachingBehavior
+    ruleSetId: securityHeaders.outputs.ruleSetId
   }
 }
 
@@ -161,10 +216,41 @@ module diagnosticSettings 'modules/monitoring/diagnosticSettings.bicep' = {
 }
 
 // ============================================================================
+// Alert Rules (Optional)
+// ============================================================================
+module alertRules 'modules/monitoring/alertRules.bicep' = if (enableAlertRules) {
+  name: 'deploy-alertRules'
+  params: {
+    alertNamePrefix: 'alert-${baseName}-${environment}'
+    frontDoorProfileId: frontDoorProfile.outputs.profileId
+    workspaceId: logAnalytics.outputs.workspaceId
+    actionGroupId: alertActionGroupId
+    location: location
+    tags: resourceTags
+  }
+}
+
+// ============================================================================
+// App Service Access Restrictions (Optional)
+// ============================================================================
+module appServiceRestrictions 'modules/backend/appServiceRestriction.bicep' = if (!empty(appServiceName)) {
+  name: 'deploy-appServiceRestrictions'
+  params: {
+    appServiceName: appServiceName
+    frontDoorId: frontDoorProfile.outputs.frontDoorId
+  }
+}
+
+// ============================================================================
 // Outputs
 // ============================================================================
 output frontDoorId string = frontDoorProfile.outputs.frontDoorId
+output frontDoorProfileId string = frontDoorProfile.outputs.profileId
 output frontDoorEndpointHostName string = frontDoorEndpoint.outputs.endpointHostName
 output frontDoorEndpointUrl string = 'https://${frontDoorEndpoint.outputs.endpointHostName}'
 output wafPolicyName string = wafPolicy.outputs.wafPolicyName
 output logAnalyticsWorkspaceId string = logAnalytics.outputs.workspaceId
+output securityHeadersRuleSetId string = securityHeaders.outputs.ruleSetId
+
+// Output for App Service restriction configuration (for manual setup if needed)
+output frontDoorIdForAppServiceRestriction string = frontDoorProfile.outputs.frontDoorId
