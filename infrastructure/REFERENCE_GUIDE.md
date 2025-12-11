@@ -1238,9 +1238,9 @@ az afd route show \
 | Field | Value |
 |-------|-------|
 | Version | 1.0 |
-| Created | December 2024 |
+| Created | December 2025 |
 | Author | Claude Code |
-| Last Updated | December 2024 |
+| Last Updated | December 2025 |
 
 ---
 
